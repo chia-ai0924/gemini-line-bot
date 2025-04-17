@@ -49,10 +49,7 @@ def handle_text(event):
         try:
             available_models = genai.list_models()
             usable = [m.name for m in available_models if "generateContent" in m.supported_generation_methods]
-            reply_text = "⚠️ 無法回應，請確認模型是否支援。
-可用模型：
-" + "
-".join(usable[:10])
+            reply_text = "⚠️ 無法回應，請確認模型是否支援。\n可用模型：\n" + "\n".join(usable[:10])
         except Exception as ee:
             reply_text = f"❌ 系統錯誤：{str(e)}
 （取得模型列表也失敗：{str(ee)}）"
