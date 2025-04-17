@@ -1,6 +1,4 @@
 import os
-from dotenv import load_dotenv
-load_dotenv()
 import json
 import tempfile
 from flask import Flask, request, abort
@@ -10,37 +8,38 @@ from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMess
 
 import google.generativeai as genai
 from google.oauth2 import service_account
+from dotenv import load_dotenv
+load_dotenv()
 
 # 初始化 Flask App
 app = Flask(__name__)
 
-# 設定 LINE Bot 金鑰
+# LINE Bot 金鑰
 line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
-# 載入 Google 服務帳戶金鑰（使用本地檔案）
-credentials = service_account.Credentials.from_service_account_file(
-    "gemini-line-bot-457106-aa75cedf9d80.json"
-)
+# 判斷是否使用環境變數金鑰（Render）或本地 JSON 檔
+if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
+    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
+    credentials = service_account.Credentials.from_service_account_info(service_account_info)
+else:
+    credentials = service_account.Credentials.from_service_account_file("gemini-line-bot-457106-aa75cedf9d80.json")
+
 genai.configure(credentials=credentials)
 
-# 模型名稱（如果已開通 vision 模型，建議使用 vision）
+# 使用模型（可改成其他 Gemini 模型）
 MODEL_NAME = "models/gemini-1.5-pro-vision"
 
-# 處理 LINE Webhook
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-
     return "OK"
 
-# 處理文字與圖片訊息
 @handler.add(MessageEvent, message=(TextMessage, ImageMessage))
 def handle_message(event):
     try:
@@ -59,7 +58,6 @@ def handle_message(event):
     except Exception as e:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"⚠️ 發生錯誤：{str(e)}"))
 
-# 下載圖片並暫存
 def download_image_from_line(message_id):
     message_content = line_bot_api.get_message_content(message_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
@@ -67,23 +65,21 @@ def download_image_from_line(message_id):
             temp_file.write(chunk)
         return temp_file.name
 
-# 呼叫 Gemini 處理文字
 def generate_gemini_text(prompt):
     model = genai.GenerativeModel(MODEL_NAME)
     response = model.generate_content(prompt)
     return response.text.strip()
 
-# 呼叫 Gemini Vision 處理圖片
 def generate_gemini_vision(image_path):
     model = genai.GenerativeModel(MODEL_NAME)
     with open(image_path, "rb") as img:
         response = model.generate_content(["請以繁體中文描述這張圖片的內容與可能用途：", img])
     return response.text.strip()
 
-# 本地測試首頁
 @app.route("/")
 def home():
     return "LINE Gemini Bot is running."
 
 if __name__ == "__main__":
     app.run(port=5000)
+
