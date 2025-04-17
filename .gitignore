@@ -1,0 +1,39 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 環境變數與密鑰
+.env
+*.json
+
+# VSCode、IDE 設定
+.vscode/
+.idea/
+
+# 系統檔
+.DS_Store
+Thumbs.db
+
+# 日誌與快取
+*.log
+*.tmp
+*.cache
+*.bak
+
+# 測試輸出
+htmlcov/
+coverage.xml
+*.cover
+
+# 部署相關
+*.db
+instance/
+.pytest_cache/
+
+# Jupyter / Notebook 暫存
+.ipynb_checkpoints/
+
+# 如果你使用 poetry/pipenv
+poetry.lock
+Pipfile.lock
