@@ -11,8 +11,10 @@ line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# 初始化 Gemini 模型（v1 正式版）
-model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-vision")
+# ✅ 使用 v1 API 初始化 Gemini 1.5 Pro Vision 模型
+model = genai.GenerativeModel(
+    model_name="models/gemini-1.5-pro-vision"
+)
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -31,8 +33,8 @@ def callback():
 def handle_message(event):
     user_text = event.message.text
     try:
-        gemini_response = model.generate_content(user_text)
-        reply_text = gemini_response.text.strip()
+        response = model.generate_content([{"text": user_text}])
+        reply_text = response.text.strip()
     except Exception as e:
         reply_text = f"❌ 發生錯誤：{str(e)}"
 
