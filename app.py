@@ -1,87 +1,60 @@
 import os
-import base64
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 import google.generativeai as genai
+import requests
+import base64
 
-# 初始化 Flask 與 LINE SDK
 app = Flask(__name__)
+
+# LINE config
 line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
-# 設定 Gemini API 金鑰
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# Gemini config (使用 v1 API)
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+model = genai.GenerativeModel(model_name="gemini-1.5-pro-vision")
 
-# 初始化 Gemini 1.5 Pro Vision 模型（v1 API）
-model = genai.GenerativeModel(
-    model_name="models/gemini-1.5-pro-vision",
-    generation_config={
-        "temperature": 0.9,
-        "top_p": 1,
-        "top_k": 1,
-        "max_output_tokens": 2048,
-    },
-)
-
-# Webhook 接收端點
-@app.route("/callback", methods=["POST"])
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
+    except Exception as e:
         abort(400)
-    return "OK"
+    return 'OK'
 
-# 處理文字訊息
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_text = event.message.text
-    try:
-        response = model.generate_content(
-            [{"role": "user", "parts": [user_text]}],
-            stream=False
-        )
-        reply_text = response.text.strip()
-    except Exception as e:
-        reply_text = f"❌ 發生錯誤：{str(e)}"
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+    response = model.generate_content(user_text)
+    reply = response.text.strip()
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
-# 處理圖片訊息
-@handler.add(MessageEvent, message=ImageMessage)
+@handler.add(MessageEvent, message=TextMessage)
 def handle_image_message(event):
-    try:
-        # 取得圖片內容
-        image_content = line_bot_api.get_message_content(event.message.id)
-        image_data = image_content.content
-        image_bytes = image_data if isinstance(image_data, bytes) else b''.join(image_data)
+    message_id = event.message.id
+    content = line_bot_api.get_message_content(message_id)
 
-        # base64 編碼
-        image_part = {
-            "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": base64.b64encode(image_bytes).decode("utf-8")
-            }
+    # 將圖片暫存並 base64 編碼
+    image_data = content.content
+    image_base64 = base64.b64encode(image_data).decode("utf-8")
+
+    # 建構 Gemini Vision 請求
+    response = model.generate_content([
+        {
+            "mime_type": "image/jpeg",
+            "data": image_base64,
+        },
+        {
+            "text": "請描述這張圖片的內容。",
         }
+    ])
+    reply = response.text.strip()
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
-        # Gemini prompt 組合
-        parts = [
-            {"text": "請用繁體中文描述這張圖片的內容，若有外語請翻譯並整合說明。"},
-            image_part
-        ]
-
-        response = model.generate_content(parts, stream=False)
-        answer = response.text.strip()
-    except Exception as e:
-        answer = f"❌ 圖片處理失敗：{str(e)}"
-
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
-
-# 本地測試時啟動 Flask（Render 不會用到）
 if __name__ == "__main__":
     app.run()
-
