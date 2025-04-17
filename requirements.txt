@@ -3,3 +3,4 @@ line-bot-sdk
 requests
 google-generativeai==0.8.5
 gunicorn
+# redeploy trigger
