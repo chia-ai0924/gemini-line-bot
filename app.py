@@ -15,20 +15,20 @@ from google.ai.generativelanguage_v1.types import Content, Part
 load_dotenv()
 app = Flask(__name__)
 
-# 讀取 LINE 憑證
+# LINE 金鑰
 line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
-# 設定 Google 憑證
+# Google Service Account 金鑰
 if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     credentials = service_account.Credentials.from_service_account_info(service_account_info)
 else:
     credentials = service_account.Credentials.from_service_account_file("gemini-line-bot-457106-aa75cedf9d80.json")
 
-# 初始化 Gemini v1 客戶端
+# Gemini v1 client
 client = GenerativeServiceClient(credentials=credentials)
-MODEL = "models/gemini-1.5-pro-vision"
+MODEL = "models/gemini-1.5-pro-vision-latest"  # ✅ 使用最新版 Vision 模型
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -59,13 +59,13 @@ def handle_message(event):
     except Exception as e:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"⚠️ 發生錯誤：{str(e)}"))
 
-# 文字訊息處理
+# 處理文字
 def generate_text_response(prompt):
     content = Content(parts=[Part(text=prompt)])
     response = client.generate_content(model=MODEL, contents=[content])
     return response.candidates[0].content.parts[0].text.strip()
 
-# 圖片訊息處理（v1 正確方式）
+# 處理圖片
 def generate_image_response(image_path):
     with open(image_path, "rb") as f:
         image_data = f.read()
@@ -73,18 +73,13 @@ def generate_image_response(image_path):
 
     content = Content(parts=[
         Part(text="請以繁體中文描述這張圖片的內容與可能用途："),
-        Part(
-            inline_data={
-                "mime_type": "image/jpeg",
-                "data": image_base64
-            }
-        )
+        Part(inline_data={"mime_type": "image/jpeg", "data": image_base64})
     ])
 
     response = client.generate_content(model=MODEL, contents=[content])
     return response.candidates[0].content.parts[0].text.strip()
 
-# 圖片下載函式
+# 下載 LINE 圖片
 def download_image_from_line(message_id):
     message_content = line_bot_api.get_message_content(message_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
