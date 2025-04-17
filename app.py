@@ -23,7 +23,7 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # 初始化 Gemini API
 configure(api_key=GEMINI_API_KEY)
-model = GenerativeModel("gemini-1.5-pro-vision-latest")
+model = GenerativeModel("gemini-pro-vision")
 
 # 自動刪除圖片（3 分鐘後）
 def delete_file_later(file_path, delay=180):
