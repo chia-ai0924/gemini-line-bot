@@ -29,7 +29,7 @@ else:
 
 # Gemini client（v1）
 client = GenerativeServiceClient(credentials=credentials)
-MODEL = "models/gemini-1.5-pro-vision-latest"  # ✅ 使用最新 Vision 模型
+MODEL = "models/gemini-1.5-pro-vision"  # ✅ 已修正，不使用 -latest
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -59,16 +59,14 @@ def handle_message(event):
 
     except Exception as e:
         error_message = traceback.format_exc()
-        print("⚠️ Gemini Bot 發生錯誤：\n", error_message)  # ✅ 印出詳細錯誤
+        print("⚠️ Gemini Bot 發生錯誤：\n", error_message)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"⚠️ 發生錯誤：{str(e)}"))
 
-# 處理文字輸入
 def generate_text_response(prompt):
     content = Content(parts=[Part(text=prompt)])
     response = client.generate_content(model=MODEL, contents=[content])
     return response.candidates[0].content.parts[0].text.strip()
 
-# 處理圖片輸入
 def generate_image_response(image_path):
     with open(image_path, "rb") as f:
         image_data = f.read()
@@ -82,7 +80,6 @@ def generate_image_response(image_path):
     response = client.generate_content(model=MODEL, contents=[content])
     return response.candidates[0].content.parts[0].text.strip()
 
-# 下載 LINE 傳來的圖片
 def download_image_from_line(message_id):
     message_content = line_bot_api.get_message_content(message_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
