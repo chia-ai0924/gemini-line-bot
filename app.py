@@ -18,7 +18,7 @@ handler = WebhookHandler(LINE_SECRET)
 genai.configure(api_key=GEMINI_API_KEY)
 
 try:
-    model = genai.GenerativeModel("gemini-pro-vision")
+   model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest")
 except Exception as e:
     print("❌ 模型初始化失敗：", e)
     model = None
