@@ -1,64 +1,69 @@
 import os
-import traceback
+import google.generativeai as genai
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
-import google.generativeai as genai
-from google.api_core.exceptions import NotFound
-
-# 設定 LINE 與 Gemini API 金鑰
-line_bot_api = LineBotApi(os.getenv("LINE_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("LINE_SECRET"))
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
+import requests
+from PIL import Image
+from io import BytesIO
 
 app = Flask(__name__)
 
-# 嘗試載入 Gemini 模型（使用 v1 正式版）
-try:
-    model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-vision")
-except Exception as e:
-    print("❌ 載入 Gemini 模型失敗：", e)
-    model = None
+line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
+handler = WebhookHandler(os.environ.get("LINE_SECRET"))
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-@app.route("/callback", methods=['POST'])
+# 使用目前可用的 vision 模型（經查證）
+model = genai.GenerativeModel(model_name="gemini-pro-vision")
+
+@app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
     except Exception as e:
-        print("❌ LINE Webhook 錯誤：", e)
-        traceback.print_exc()
+        print("❌ webhook callback error:", e)
         abort(400)
-    return 'OK'
+    return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_text = event.message.text
-    reply = ""
-
-    if not model:
-        reply = "❌ 尚未正確初始化 Gemini 模型，請稍後再試。"
-    else:
+    user_text = event.message.text.strip()
+    try:
+        gemini_response = model.generate_content([{"text": user_text}])
+        reply_text = gemini_response.text.strip()
+    except Exception as e:
+        print("❌ Gemini 回應錯誤：", e)
+        # 額外印出可用模型協助查錯
         try:
-            gemini_response = model.generate_content([{"text": user_text}])
-            reply = gemini_response.text.strip()
-        except NotFound as nf:
-            print("❌ 找不到模型，可能模型名稱錯誤或帳號無權限：", nf)
-            try:
-                # 額外偵錯：列出所有可用模型
-                models = genai.list_models()
-                available = "\n".join([m.name for m in models if "generateContent" in m.supported_generation_methods])
-                reply = "⚠️ 模型無效或無法使用。\n請確認是否已啟用 Gemini 1.5 Pro Vision。\n\n【可用模型】:\n" + available
-            except Exception as list_err:
-                print("⚠️ 列出模型失敗：", list_err)
-                reply = "❌ 模型錯誤，且無法取得模型列表。\n請聯絡管理者。"
-        except Exception as e:
-            print("❌ 呼叫 Gemini 發生錯誤：", e)
-            traceback.print_exc()
-            reply = "❌ AI 回覆失敗，請稍後再試。"
+            available_models = [m.name for m in genai.list_models()]
+            reply_text = f"⚠️ 模型無效或無法使用。
+請確認是否已啟用 Gemini 1.5 Pro Vision。
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+【可用模型】:\n" + "\n".join(available_models[:20])
+        except Exception as ee:
+            reply_text = f"❌ 系統錯誤：{str(e)}\n（列出模型時也失敗：{str(ee)}）"
+
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    try:
+        image_content = line_bot_api.get_message_content(event.message.id)
+        image_data = BytesIO()
+        for chunk in image_content.iter_content():
+            image_data.write(chunk)
+        image_data.seek(0)
+        image = Image.open(image_data)
+
+        gemini_response = model.generate_content([{"text": "請分析這張圖片內容"}, image])
+        reply_text = gemini_response.text.strip()
+    except Exception as e:
+        print("❌ 圖片處理錯誤：", e)
+        reply_text = "⚠️ 處理圖片時發生錯誤，請稍後再試"
+
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
 if __name__ == "__main__":
     app.run()
