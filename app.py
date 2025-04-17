@@ -18,7 +18,7 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
-# 判斷是否使用環境變數金鑰（Render）或本地 JSON 檔
+# 判斷金鑰來源：Render 的 JSON or 本地金鑰檔
 if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
     credentials = service_account.Credentials.from_service_account_info(service_account_info)
@@ -27,7 +27,7 @@ else:
 
 genai.configure(credentials=credentials)
 
-# 使用模型（可改成其他 Gemini 模型）
+# 模型名稱
 MODEL_NAME = "models/gemini-1.5-pro-vision"
 
 @app.route("/callback", methods=["POST"])
@@ -58,6 +58,7 @@ def handle_message(event):
     except Exception as e:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"⚠️ 發生錯誤：{str(e)}"))
 
+# 下載 LINE 傳來的圖片
 def download_image_from_line(message_id):
     message_content = line_bot_api.get_message_content(message_id)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
@@ -65,15 +66,21 @@ def download_image_from_line(message_id):
             temp_file.write(chunk)
         return temp_file.name
 
+# Gemini 處理文字
 def generate_gemini_text(prompt):
     model = genai.GenerativeModel(MODEL_NAME)
     response = model.generate_content(prompt)
     return response.text.strip()
 
+# Gemini 處理圖片（已修正傳入格式）
 def generate_gemini_vision(image_path):
     model = genai.GenerativeModel(MODEL_NAME)
-    with open(image_path, "rb") as img:
-        response = model.generate_content(["請以繁體中文描述這張圖片的內容與可能用途：", img])
+    with open(image_path, "rb") as img_file:
+        image_bytes = img_file.read()
+        response = model.generate_content([
+            "請以繁體中文描述這張圖片的內容與可能用途：", 
+            {"mime_type": "image/jpeg", "data": image_bytes}
+        ])
     return response.text.strip()
 
 @app.route("/")
