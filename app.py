@@ -1,70 +1,88 @@
-import os
-import tempfile
-import requests
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-
+from linebot.models import MessageEvent, ImageMessage, TextMessage, TextSendMessage
+import os
+import base64
+import requests
 import google.generativeai as genai
-from google.generativeai.types.content_types import Content, Part
 
 # 初始化
 app = Flask(__name__)
-line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
-genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
-# 建立 Gemini 1.5 Pro Vision 模型
-model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-vision")
+# LINE 機器人設定
+line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
+handler = WebhookHandler(os.environ.get("LINE_SECRET"))
 
-@app.route("/callback", methods=["POST"])
+# 設定 Gemini API 金鑰與模型
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+model = genai.GenerativeModel("models/gemini-1.5-pro-vision")
+
+# 根路由
+@app.route("/")
+def home():
+    return "Gemini LINE Bot is running."
+
+# LINE webhook callback
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
+    return 'OK'
 
-    return "OK"
+# 處理文字與圖片訊息
+@handler.add(MessageEvent, message=(TextMessage, ImageMessage))
+def handle_message(event):
+    if isinstance(event.message, TextMessage):
+        user_text = event.message.text
+        reply = gemini_reply(user_text)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
-@handler.add(MessageEvent, message=TextMessage)
-def handle_text_message(event):
-    user_input = event.message.text
+    elif isinstance(event.message, ImageMessage):
+        image_content = line_bot_api.get_message_content(event.message.id)
+        image_data = image_content.content
+        image_bytes = image_data if isinstance(image_data, bytes) else b''.join(image_data)
+
+        image_part = {
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": base64.b64encode(image_bytes).decode("utf-8")
+            }
+        }
+
+        prompt = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "請幫我看這張圖片，說明內容是什麼，若有外語請翻譯成繁體中文"},
+                        image_part
+                    ]
+                }
+            ]
+        }
+
+        try:
+            response = model.generate_content(prompt["contents"])
+            answer = response.text.strip()
+        except Exception as e:
+            answer = f"圖片處理時發生錯誤：{str(e)}"
+
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
+
+# Gemini 處理文字
+def gemini_reply(text):
     try:
-        response = model.generate_content(user_input)
-        reply = response.text
+        response = model.generate_content([{"role": "user", "parts": [text]}])
+        return response.text.strip()
     except Exception as e:
-        reply = f"發生錯誤：{e}"
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return f"無法取得 Gemini 回覆：{str(e)}"
 
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image_message(event):
-    try:
-        # 取得圖片內容並暫存
-        message_content = line_bot_api.get_message_content(event.message.id)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tf:
-            for chunk in message_content.iter_content():
-                tf.write(chunk)
-            temp_path = tf.name
+if __name__ == "__main__":
+    app.run()
 
-        # 讀取圖片並送入 Gemini 模型
-        with open(temp_path, "rb") as img:
-            image_bytes = img.read()
-
-        vision_input: Content = [
-            Part.from_data(image_bytes, mime_type="image/jpeg"),
-            Part.from_text("請用繁體中文說明這張圖片的內容，若包含文字請翻譯並整合說明")
-        ]
-
-        response = model.generate_content(vision_input)
-        reply = response.text
-    except Exception as e:
-        reply = f"發生錯誤：{e}"
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
-
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
