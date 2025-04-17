@@ -51,8 +51,8 @@ def handle_text(event):
             usable = [m.name for m in available_models if "generateContent" in m.supported_generation_methods]
             reply_text = "⚠️ 無法回應，請確認模型是否支援。\n可用模型：\n" + "\n".join(usable[:10])
         except Exception as ee:
-            reply_text = f"❌ 系統錯誤：{str(e)}
-（取得模型列表也失敗：{str(ee)}）"
+            reply_text = f"❌ 系統錯誤：{str(e)}\n（取得模型列表也失敗：{str(ee)}）"
+
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
