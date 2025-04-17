@@ -1,20 +1,29 @@
 import os
-import google.generativeai as genai
+import traceback
+from io import BytesIO
+from PIL import Image
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-import requests
-from PIL import Image
-from io import BytesIO
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-line_bot_api = LineBotApi(os.environ.get("LINE_ACCESS_TOKEN"))
-handler = WebhookHandler(os.environ.get("LINE_SECRET"))
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# 初始化 LINE 與 Gemini API 設定
+LINE_ACCESS_TOKEN = os.environ.get("LINE_ACCESS_TOKEN")
+LINE_SECRET = os.environ.get("LINE_SECRET")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 使用目前可用的 vision 模型（經查證）
-model = genai.GenerativeModel(model_name="gemini-pro-vision")
+line_bot_api = LineBotApi(LINE_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_SECRET)
+genai.configure(api_key=GEMINI_API_KEY)
+
+# 使用 Gemini Vision 模型
+try:
+    model = genai.GenerativeModel("gemini-pro-vision")
+except Exception as e:
+    print("❌ 模型初始化失敗：", e)
+    model = None
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -23,27 +32,29 @@ def callback():
     try:
         handler.handle(body, signature)
     except Exception as e:
-        print("❌ webhook callback error:", e)
+        print("❌ webhook callback 錯誤：", e)
+        traceback.print_exc()
         abort(400)
     return "OK"
 
 @handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    user_text = event.message.text.strip()
+def handle_text(event):
+    user_text = event.message.text
     try:
-        gemini_response = model.generate_content([{"text": user_text}])
-        reply_text = gemini_response.text.strip()
+        if not model:
+            raise ValueError("模型尚未初始化")
+        response = model.generate_content(user_text)
+        reply_text = response.text.strip()
     except Exception as e:
-        print("❌ Gemini 回應錯誤：", e)
-        # 額外印出可用模型協助查錯
+        print("❌ Gemini 回覆錯誤：", e)
+        traceback.print_exc()
         try:
-            available_models = [m.name for m in genai.list_models()]
-            reply_text = f"⚠️ 模型無效或無法使用。
-請確認是否已啟用 Gemini 1.5 Pro Vision。
-
-【可用模型】:\n" + "\n".join(available_models[:20])
+            available_models = genai.list_models()
+            usable = [m.name for m in available_models if "generateContent" in m.supported_generation_methods]
+            reply_text = "⚠️ 無法回應，請確認模型是否支援。
+可用模型：\n" + "\n".join(usable[:10])
         except Exception as ee:
-            reply_text = f"❌ 系統錯誤：{str(e)}\n（列出模型時也失敗：{str(ee)}）"
+            reply_text = f"❌ 系統錯誤：{str(e)}\n（取得模型列表也失敗：{str(ee)}）"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
@@ -51,17 +62,25 @@ def handle_message(event):
 def handle_image(event):
     try:
         image_content = line_bot_api.get_message_content(event.message.id)
-        image_data = BytesIO()
+        image_stream = BytesIO()
         for chunk in image_content.iter_content():
-            image_data.write(chunk)
-        image_data.seek(0)
-        image = Image.open(image_data)
+            image_stream.write(chunk)
+        image_stream.seek(0)
 
-        gemini_response = model.generate_content([{"text": "請分析這張圖片內容"}, image])
-        reply_text = gemini_response.text.strip()
+        try:
+            image = Image.open(image_stream)
+        except Exception:
+            raise ValueError("圖片格式解析失敗，請確認為 JPG/PNG 格式")
+
+        response = model.generate_content([
+            "請分析這張圖片內容，若包含文字請翻譯為繁體中文：",
+            image
+        ])
+        reply_text = response.text.strip()
     except Exception as e:
         print("❌ 圖片處理錯誤：", e)
-        reply_text = "⚠️ 處理圖片時發生錯誤，請稍後再試"
+        traceback.print_exc()
+        reply_text = f"⚠️ 圖片處理失敗：{str(e)}"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
