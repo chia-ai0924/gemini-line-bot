@@ -1,7 +1,10 @@
-flask
+Flask
 line-bot-sdk
-gunicorn
-Pillow
-python-dotenv
+google-api-python-client
 google-auth
-google-ai-generativelanguage==0.6.17
+google-auth-oauthlib
+google-auth-httplib2
+google-cloud-storage
+google-generativeai==0.6.17
+python-dotenv
+Pillow
