@@ -46,7 +46,8 @@ def check_password(user_id, message):
         if message.strip() == UNLOCK_PHRASE:
             failed_attempts[user_id] = 0
             return False, None
-        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
+        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。
+請輸入密語「放我進來」解鎖。"
     if message in passwords:
         authorized_users[user_id] = True
         del passwords[message]
@@ -56,7 +57,8 @@ def check_password(user_id, message):
     else:
         failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
         if failed_attempts[user_id] >= MAX_FAILED_ATTEMPTS:
-            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
+            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。
+請輸入密語「放我進來」解鎖。"
         return False, f"⚠️ 密碼錯誤（已輸入 {failed_attempts[user_id]} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
 
 def image_to_bytes(image):
