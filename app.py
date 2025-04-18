@@ -1,4 +1,3 @@
-
 import os
 import json
 from flask import Flask, request, abort
@@ -15,11 +14,13 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
+# 初始化 Gemini
 service_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_info)
 client_options = ClientOptions(api_endpoint="https://generativelanguage.googleapis.com/")
 model = GenerativeModel(model_name="models/gemini-1.5-pro", credentials=credentials, client_options=client_options)
 
+# 驗證與密碼系統
 AUTHORIZED_USERS_FILE = "authorized_users.json"
 PASSWORDS_FILE = "passwords.json"
 MAX_FAILED_ATTEMPTS = 3
@@ -46,8 +47,7 @@ def check_password(user_id, message):
         if message.strip() == UNLOCK_PHRASE:
             failed_attempts[user_id] = 0
             return False, None
-        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。
-請輸入密語「放我進來」解鎖。"
+        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
     if message in passwords:
         authorized_users[user_id] = True
         del passwords[message]
@@ -57,8 +57,7 @@ def check_password(user_id, message):
     else:
         failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
         if failed_attempts[user_id] >= MAX_FAILED_ATTEMPTS:
-            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。
-請輸入密語「放我進來」解鎖。"
+            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
         return False, f"⚠️ 密碼錯誤（已輸入 {failed_attempts[user_id]} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
 
 def image_to_bytes(image):
@@ -114,3 +113,4 @@ def handle_message(event):
         reply_text(token, response.text.strip())
     except Exception as e:
         reply_text(token, f"❌ 回應失敗：{e}")
+
