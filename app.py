@@ -1,115 +1,131 @@
-
-import os
-import json
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-from google.oauth2 import service_account
-import google.generativeai as genai
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage
+from google.generativeai import GenerativeModel, configure
+import os, json
+from io import BytesIO
+from PIL import Image
 
-app = Flask(__name__)
-
-# LINE 設定
+# 初始化 LINE API
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# Google Gemini Service Account 認證
-credentials_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
-credentials = service_account.Credentials.from_service_account_info(credentials_info)
-genai.configure(credentials=credentials)
+# 初始化 Gemini API（使用 Service Account）
+service_account = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
+configure(service_account=service_account)
+model = GenerativeModel("models/gemini-1.5-pro")
 
-# 模型設定
-MODEL = "models/gemini-1.5-pro"
-chat_history = {}
-MAX_ATTEMPTS = 3
-unlock_phrase = "放我進來"
+# 初始化 Flask
+app = Flask(__name__)
 
-# 載入密碼與授權紀錄檔案
-PASSWORD_FILE = "passwords.json"
-AUTH_FILE = "authorized_users.json"
+# 授權與密碼機制
+AUTHORIZED_USERS_FILE = "authorized_users.json"
+PASSWORDS_FILE = "passwords.json"
+MAX_FAILED_ATTEMPTS = 3
+UNLOCK_PHRASE = "放我進來"
 
-if os.path.exists(PASSWORD_FILE):
-    with open(PASSWORD_FILE, "r", encoding="utf-8") as f:
-        passwords = json.load(f)
-else:
-    passwords = {}
+# 載入 JSON 資料
+def load_json(filename):
+    return json.load(open(filename, "r", encoding="utf-8")) if os.path.exists(filename) else {}
 
-if os.path.exists(AUTH_FILE):
-    with open(AUTH_FILE, "r", encoding="utf-8") as f:
-        authorized_users = set(json.load(f))
-else:
-    authorized_users = set()
+authorized_users = load_json(AUTHORIZED_USERS_FILE)
+passwords = load_json(PASSWORDS_FILE)
+failed_attempts = {}
+conversations = {}
 
-password_attempts = {}
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def save_passwords():
-    with open(PASSWORD_FILE, "w", encoding="utf-8") as f:
-        json.dump(passwords, f, ensure_ascii=False, indent=2)
+def reply_text(token, text):
+    line_bot_api.reply_message(token, TextSendMessage(text=text))
 
-def save_authorized_users():
-    with open(AUTH_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(authorized_users), f, ensure_ascii=False, indent=2)
+# 密碼處理邏輯
+def check_password(user_id, message):
+    if authorized_users.get(user_id): return True, None
 
+    if failed_attempts.get(user_id, 0) >= MAX_FAILED_ATTEMPTS:
+        if message.strip() == UNLOCK_PHRASE:
+            failed_attempts[user_id] = 0
+            return False, "✅ 解鎖成功，請重新輸入啟用密碼。"
+        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
+
+    if message in passwords:
+        authorized_users[user_id] = True
+        del passwords[message]
+        save_json(AUTHORIZED_USERS_FILE, authorized_users)
+        save_json(PASSWORDS_FILE, passwords)
+        return True, "✅ 驗證成功，歡迎使用 AI！請開始對話。"
+    else:
+        failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
+        if failed_attempts[user_id] >= MAX_FAILED_ATTEMPTS:
+            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。\n請輸入密語「放我進來」解鎖。"
+        return False, f"⚠️ 密碼錯誤（已輸入 {failed_attempts[user_id]} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
+
+# 圖片處理
+def get_image_data(message_id):
+    content = line_bot_api.get_message_content(message_id)
+    image_data = BytesIO(content.content)
+    image = Image.open(image_data)
+    return image
+
+def make_vision_prompt(image):
+    return [{
+        "parts": [
+            {"text": "請用繁體中文說明這張圖片的內容。"},
+            {"inline_data": {"mime_type": "image/png", "data": image_to_bytes(image)}}
+        ]
+    }]
+
+def image_to_bytes(image):
+    with BytesIO() as output:
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+# LINE Webhook
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers.get("X-Line-Signature")
+    signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
     try:
         handler.handle(body, signature)
-    except Exception as e:
-        print("Webhook error:", e)
+    except InvalidSignatureError:
         abort(400)
     return "OK"
 
-@handler.add(MessageEvent, message=TextMessage)
+# 處理訊息
+@handler.add(MessageEvent, message=(TextMessage, ImageMessage))
 def handle_message(event):
     user_id = event.source.user_id
-    text = event.message.text.strip()
+    token = event.reply_token
 
-    if user_id in password_attempts and password_attempts[user_id] >= MAX_ATTEMPTS:
-        if text == unlock_phrase:
-            del password_attempts[user_id]
-            reply = "✅ 解鎖成功，請重新輸入啟用密碼。"
-        else:
-            return
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+    # 驗證授權
+    if not authorized_users.get(user_id):
+        ok, msg = check_password(user_id, event.message.text if isinstance(event.message, TextMessage) else "")
+        if msg:
+            reply_text(token, msg)
         return
 
-    if user_id not in authorized_users:
-        if text in passwords and not passwords[text]["used"]:
-            passwords[text]["used"] = True
-            authorized_users.add(user_id)
-            save_passwords()
-            save_authorized_users()
-            chat_history[user_id] = []
-            reply = "✅ 驗證成功，歡迎使用 AI！請開始對話。"
-        else:
-            password_attempts[user_id] = password_attempts.get(user_id, 0) + 1
-            attempts = password_attempts[user_id]
-            if attempts >= MAX_ATTEMPTS:
-                reply = "⛔ 密碼錯誤已達 3 次，帳號已封鎖，請輸入密語『放我進來』解鎖。"
-            else:
-                reply = f"❌ 密碼錯誤（已輸入 {attempts} 次），請重新輸入（錯誤達 {MAX_ATTEMPTS} 次將封鎖）"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+    # 圖片訊息
+    if isinstance(event.message, ImageMessage):
+        try:
+            image = get_image_data(event.message.id)
+            result = model.generate_content(make_vision_prompt(image))
+            reply_text(token, result.text.strip())
+        except Exception as e:
+            reply_text(token, f"❌ 發生錯誤，請稍後再試。\n\n{e}")
         return
 
-    # 記憶功能
+    # 文字訊息（多輪記憶）
+    user_input = event.message.text.strip()
+    conversations.setdefault(user_id, [])
+    conversations[user_id].append({"role": "user", "parts": [user_input]})
+
     try:
-        history = chat_history.get(user_id, [])
-        history.append({"role": "user", "parts": [text]})
-        model = genai.GenerativeModel(MODEL)
-        response = model.generate_content(history)
-        reply = response.text.strip()
-        history.append({"role": "model", "parts": [reply]})
-        chat_history[user_id] = history[-10:]
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(reply))
+        result = model.generate_content(conversations[user_id])
+        conversations[user_id].append({"role": "model", "parts": [result.text]})
+        reply_text(token, result.text.strip())
     except Exception as e:
-        print("❌ 發生錯誤：", e)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage("⚠️ 系統發生錯誤，請稍後再試。"))
+        reply_text(token, f"❌ 發生錯誤，請稍後再試。\n\n{e}")
 
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image(event):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage("目前僅支援文字訊息，請先完成啟用密碼。"))
-
-if __name__ == "__main__":
-    app.run()
