@@ -1,128 +1,124 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
-
-import os
-import json
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, ImageMessage
+import os, json, time
 import google.generativeai as genai
-from google.oauth2.service_account import Credentials
+from PIL import Image
+import requests
+from io import BytesIO
 
+# ========== 基本設定 ==========
 app = Flask(__name__)
+line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
+handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
+genai.configure(service_account=json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")))
+model = genai.GenerativeModel(model_name="models/gemini-1.5-pro")
 
-# 初始化 LINE
-line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
-
-# 初始化 Gemini（使用 Service Account）
-service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
-credentials = Credentials.from_service_account_info(
-    service_account_info,
-    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-)
-genai.configure(credentials=credentials)
-model = genai.GenerativeModel(model_name="models/gemini-1.5-pro", generation_config={"temperature": 0.7})
-
-# === 使用者授權機制 ===
-AUTHORIZED_USERS_FILE = "authorized_users.json"
-PASSWORDS_FILE = "passwords.json"
-MAX_FAILED_ATTEMPTS = 3
-UNLOCK_PHRASE = "放我進來"
-
-# 載入已授權用戶
-def load_json(filename):
-    if not os.path.exists(filename):
-        with open(filename, "w") as f:
-            json.dump({}, f)
-    with open(filename, "r") as f:
-        return json.load(f)
-
-def save_json(filename, data):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=2)
-
-authorized_users = load_json(AUTHORIZED_USERS_FILE)
-passwords = load_json(PASSWORDS_FILE)
+# ========== 密碼與授權邏輯 ==========
+password_list = [
+    "921", "122", "321", "924", "901", "918", "519", "802", "0519", "603",
+    "104", "123", "861", "010", "020", "030", "040", "050", "060", "070"
+]
+authorized_users = set()
+used_passwords = set()
 failed_attempts = {}
 
-# 檢查是否授權
-def is_authorized(user_id):
-    return user_id in authorized_users
-
-# 處理密碼驗證
-def verify_password(user_id, message_text):
+def check_authorization(user_id, text):
+    # 已授權
     if user_id in authorized_users:
-        return True, ""
+        return True, None
 
     # 解鎖密語
-    if message_text.strip() == UNLOCK_PHRASE:
+    if text.strip() == "放我進來":
         failed_attempts.pop(user_id, None)
-        return False, "✅ 解鎖成功，請重新輸入啟用密碼。"
+        return False, None
 
-    # 檢查是否已封鎖
-    if failed_attempts.get(user_id, 0) >= MAX_FAILED_ATTEMPTS:
-        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。請輸入密語「放我進來」來解鎖。"
-
-    # 比對密碼
-    if message_text in passwords:
-        authorized_users[user_id] = {"authorized": True}
-        save_json(AUTHORIZED_USERS_FILE, authorized_users)
-        del passwords[message_text]
-        save_json(PASSWORDS_FILE, passwords)
+    # 密碼驗證
+    if text in password_list and text not in used_passwords:
+        authorized_users.add(user_id)
+        used_passwords.add(text)
         failed_attempts.pop(user_id, None)
         return True, "✅ 驗證成功，歡迎使用 AI！請開始對話。"
+
+    # 密碼錯誤處理
+    failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
+    attempts = failed_attempts[user_id]
+    if attempts >= 3:
+        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。請輸入密語「放我進來」來解除。"
     else:
-        failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
-        remaining = MAX_FAILED_ATTEMPTS - failed_attempts[user_id]
-        if remaining > 0:
-            return False, f"⚠️ 密碼錯誤（已輸入 {failed_attempts[user_id]} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
-        else:
-            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。請輸入密語「放我進來」來解鎖。"
+        return False, f"⚠️ 密碼錯誤（已輸入 {attempts} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
 
-# 多輪記憶功能
-conversation_history = {}
+# ========== 對話記憶 ==========
+user_histories = {}
 
-def build_prompt(user_id, user_input):
-    history = conversation_history.get(user_id, [])
-    history.append({"role": "user", "parts": [user_input]})
-    conversation_history[user_id] = history[-10:]  # 最多保留 10 則訊息
-    return history
+def update_history(user_id, role, content):
+    history = user_histories.setdefault(user_id, [])
+    history.append({"role": role, "parts": [content]})
+    if len(history) > 10:
+        history.pop(0)
 
-@app.route("/callback", methods=["POST"])
+# ========== 圖片處理 ==========
+def download_image(image_id):
+    headers = {'Authorization': f'Bearer {os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")}'}
+    res = requests.get(f"https://api-data.line.me/v2/bot/message/{image_id}/content", headers=headers)
+    return Image.open(BytesIO(res.content))
+
+# ========== 回覆處理 ==========
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return "OK"
+    except Exception as e:
+        print("發生錯誤：", e)
+        return 'Error', 500
+    return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     user_id = event.source.user_id
-    message_text = event.message.text.strip()
+    text = event.message.text.strip()
 
-    if not is_authorized(user_id):
-        success, response = verify_password(user_id, message_text)
-        if success:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response))
-        else:
-            if response:
-                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response))
+    authorized, message = check_authorization(user_id, text)
+    if not authorized:
+        if message:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
         return
 
-    # 已授權用戶，開始與 Gemini 對話
-    prompt = build_prompt(user_id, message_text)
+    if message:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
+        return
+
+    update_history(user_id, "user", text)
     try:
-        response = model.generate_content(prompt)
-        reply = response.text
+        response = model.generate_content(user_histories[user_id])
+        reply = response.text.strip()
+        update_history(user_id, "model", reply)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     except Exception as e:
-        reply = f"⚠️ 發生錯誤，請稍後再試。\n{e}"
+        print("文字處理錯誤：", e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 回覆發生錯誤，請稍後再試。"))
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    user_id = event.source.user_id
+    authorized, message = check_authorization(user_id, "")
+    if not authorized:
+        if message:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=message))
+        return
 
-# 部署入口
+    image_id = event.message.id
+    try:
+        img = download_image(image_id)
+        response = model.generate_content([{"role": "user", "parts": ["請用繁體中文幫我看這張圖片在說什麼？", img]}])
+        reply = response.text.strip()
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    except Exception as e:
+        print("圖片處理錯誤：", e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 圖片分析失敗，請稍後再試。"))
+
+# ========== 啟動應用 ==========
 if __name__ == "__main__":
     app.run()
