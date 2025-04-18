@@ -11,20 +11,15 @@ from google.generativeai import GenerativeModel
 from io import BytesIO
 from PIL import Image
 
-# Flask 應用
 app = Flask(__name__)
-
-# LINE 設定
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# 初始化 Gemini 模型
 service_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_info)
 client_options = ClientOptions(api_endpoint="https://generativelanguage.googleapis.com/")
 model = GenerativeModel(model_name="models/gemini-1.5-pro", credentials=credentials, client_options=client_options)
 
-# 記憶與授權
 AUTHORIZED_USERS_FILE = "authorized_users.json"
 PASSWORDS_FILE = "passwords.json"
 MAX_FAILED_ATTEMPTS = 3
@@ -50,7 +45,7 @@ def check_password(user_id, message):
     if failed_attempts.get(user_id, 0) >= MAX_FAILED_ATTEMPTS:
         if message.strip() == UNLOCK_PHRASE:
             failed_attempts[user_id] = 0
-            return False, None  # 解鎖成功但不顯示訊息
+            return False, None
         return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。
 請輸入密語「放我進來」解鎖。"
     if message in passwords:
@@ -110,7 +105,6 @@ def handle_message(event):
             reply_text(token, f"❌ 圖片處理錯誤：{e}")
         return
 
-    # 文字訊息（有記憶）
     user_input = event.message.text.strip()
     conversations.setdefault(user_id, [])
     conversations[user_id].append({"role": "user", "parts": [user_input]})
