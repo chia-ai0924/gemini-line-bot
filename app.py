@@ -1,42 +1,92 @@
-import os
-import json
-import base64
-import tempfile
-import traceback
 from flask import Flask, request, abort
-from dotenv import load_dotenv
-from PIL import Image
-from collections import deque
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
-from google.oauth2 import service_account
-from google.ai.generativelanguage_v1 import GenerativeServiceClient
-from google.ai.generativelanguage_v1.types import Content, Part
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
-# 載入 .env 環境變數
-load_dotenv()
+import os
+import json
+import google.generativeai as genai
+from google.oauth2.service_account import Credentials
 
-# 初始化 Flask App
 app = Flask(__name__)
 
-# LINE 金鑰
-line_bot_api = LineBotApi(os.environ["LINE_ACCESS_TOKEN"])
-handler = WebhookHandler(os.environ["LINE_SECRET"])
+# 初始化 LINE
+line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
+handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-# 設定 Google Gemini API 憑證
-if os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"):
-    sa_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-    credentials = service_account.Credentials.from_service_account_info(sa_info)
-else:
-    credentials = service_account.Credentials.from_service_account_file("gemini-line-bot-457106-aa75cedf9d80.json")
+# 初始化 Gemini（使用 Service Account）
+service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
+credentials = Credentials.from_service_account_info(
+    service_account_info,
+    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+)
+genai.configure(credentials=credentials)
+model = genai.GenerativeModel(model_name="models/gemini-1.5-pro", generation_config={"temperature": 0.7})
 
-# 初始化 Gemini Client
-client = GenerativeServiceClient(credentials=credentials)
-MODEL = "models/gemini-1.5-pro-002"
+# === 使用者授權機制 ===
+AUTHORIZED_USERS_FILE = "authorized_users.json"
+PASSWORDS_FILE = "passwords.json"
+MAX_FAILED_ATTEMPTS = 3
+UNLOCK_PHRASE = "放我進來"
 
-# 使用者聊天記憶（最多保留每人 10 則訊息，即 5 輪）
-chat_histories = {}  # user_id: deque of Parts
+# 載入已授權用戶
+def load_json(filename):
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
+            json.dump({}, f)
+    with open(filename, "r") as f:
+        return json.load(f)
+
+def save_json(filename, data):
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=2)
+
+authorized_users = load_json(AUTHORIZED_USERS_FILE)
+passwords = load_json(PASSWORDS_FILE)
+failed_attempts = {}
+
+# 檢查是否授權
+def is_authorized(user_id):
+    return user_id in authorized_users
+
+# 處理密碼驗證
+def verify_password(user_id, message_text):
+    if user_id in authorized_users:
+        return True, ""
+
+    # 解鎖密語
+    if message_text.strip() == UNLOCK_PHRASE:
+        failed_attempts.pop(user_id, None)
+        return False, "✅ 解鎖成功，請重新輸入啟用密碼。"
+
+    # 檢查是否已封鎖
+    if failed_attempts.get(user_id, 0) >= MAX_FAILED_ATTEMPTS:
+        return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。請輸入密語「放我進來」來解鎖。"
+
+    # 比對密碼
+    if message_text in passwords:
+        authorized_users[user_id] = {"authorized": True}
+        save_json(AUTHORIZED_USERS_FILE, authorized_users)
+        del passwords[message_text]
+        save_json(PASSWORDS_FILE, passwords)
+        failed_attempts.pop(user_id, None)
+        return True, "✅ 驗證成功，歡迎使用 AI！請開始對話。"
+    else:
+        failed_attempts[user_id] = failed_attempts.get(user_id, 0) + 1
+        remaining = MAX_FAILED_ATTEMPTS - failed_attempts[user_id]
+        if remaining > 0:
+            return False, f"⚠️ 密碼錯誤（已輸入 {failed_attempts[user_id]} 次），請重新輸入啟用密碼（錯誤達 3 次將被封鎖）"
+        else:
+            return False, "⛔ 密碼錯誤已達 3 次，帳號已封鎖。請輸入密語「放我進來」來解鎖。"
+
+# 多輪記憶功能
+conversation_history = {}
+
+def build_prompt(user_id, user_input):
+    history = conversation_history.get(user_id, [])
+    history.append({"role": "user", "parts": [user_input]})
+    conversation_history[user_id] = history[-10:]  # 最多保留 10 則訊息
+    return history
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -47,69 +97,32 @@ def callback():
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
-
     return "OK"
 
-@handler.add(MessageEvent, message=(TextMessage, ImageMessage))
-def handle_message(event):
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text(event):
+    user_id = event.source.user_id
+    message_text = event.message.text.strip()
+
+    if not is_authorized(user_id):
+        success, response = verify_password(user_id, message_text)
+        if success:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response))
+        else:
+            if response:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=response))
+        return
+
+    # 已授權用戶，開始與 Gemini 對話
+    prompt = build_prompt(user_id, message_text)
     try:
-        user_id = event.source.user_id
-
-        if user_id not in chat_histories:
-            chat_histories[user_id] = deque(maxlen=10)  # 最多記住 5 輪（10 則）
-
-        if isinstance(event.message, TextMessage):
-            user_input = event.message.text.strip()
-            reply = handle_text(user_id, user_input)
-
-        elif isinstance(event.message, ImageMessage):
-            message_id = event.message.id
-            image_path = download_image_from_line(message_id)
-            reply = handle_image(image_path)
-            os.remove(image_path)
-
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-
+        response = model.generate_content(prompt)
+        reply = response.text
     except Exception as e:
-        error_msg = traceback.format_exc()
-        print("❌ 發生錯誤：", error_msg)
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ 系統錯誤，請稍後再試"))
+        reply = f"⚠️ 發生錯誤，請稍後再試。\n{e}"
 
-def handle_text(user_id, user_input):
-    history = list(chat_histories[user_id])  # 取得對話歷史
-    history.append(Part(text=user_input))    # 新輸入加入對話
-    content = Content(parts=history)
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
-    response = client.generate_content(model=MODEL, contents=[content])
-    answer = response.candidates[0].content.parts[0].text.strip()
-
-    # 將問與答都存進歷史
-    chat_histories[user_id].append(Part(text=answer))
-    return answer
-
-def handle_image(image_path):
-    with open(image_path, "rb") as f:
-        image_data = f.read()
-    image_base64 = base64.b64encode(image_data).decode("utf-8")
-
-    content = Content(parts=[
-        Part(text="請以繁體中文說明這張圖片的內容與可能用途："),
-        Part(inline_data={"mime_type": "image/jpeg", "data": image_base64})
-    ])
-
-    response = client.generate_content(model=MODEL, contents=[content])
-    return response.candidates[0].content.parts[0].text.strip()
-
-def download_image_from_line(message_id):
-    message_content = line_bot_api.get_message_content(message_id)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-        for chunk in message_content.iter_content():
-            temp_file.write(chunk)
-        return temp_file.name
-
-@app.route("/")
-def home():
-    return "Gemini LINE Bot is running with memory!"
-
+# 部署入口
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run()
