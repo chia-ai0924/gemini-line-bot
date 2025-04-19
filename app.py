@@ -111,7 +111,11 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = history + [{"role": "user", "parts": [f"{system_role}\n{msg}"]}]
+    messages = [
+        {"role": "system", "parts": [system_role]},
+        *history,
+        {"role": "user", "parts": [msg]}
+    ]
 
     try:
         response = model.generate_content(messages)
@@ -143,7 +147,7 @@ def handle_image(event):
             {
                 "role": "user",
                 "parts": [
-                    {"text": "請分析這張圖片的內容，若非中文請翻譯並以繁體中文說明。"},
+                    {"text": "你是具備醫療常識的 AI 小護士，請嘗試根據圖片判斷是否有外傷、紅腫、瘀青、割傷或其他可見異常，並根據常見症狀推論可能的健康問題。請以繁體中文描述，並附上提醒：此為 AI 分析建議，無法替代專業醫療診斷。"},
                     {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
                 ]
             }
@@ -170,3 +174,4 @@ def serve_image(filename):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
