@@ -111,7 +111,7 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = history + [{"role": "user", "parts": [f"{system_role}\n{msg}"]}]
+    messages = [{"role": "user", "parts": [system_role]}] + history + [{"role": "user", "parts": [msg]}]
 
     try:
         response = model.generate_content(messages)
@@ -139,14 +139,31 @@ def handle_image(event):
         with open(image_path, "rb") as image_file:
             image_bytes = image_file.read()
 
+        # 初步分析圖片內容用於分類用途
+        preview_response = model.generate_content([
+            {"role": "user", "parts": [
+                {"text": "這張圖片的內容大致上是什麼？請用繁體中文簡短說明，約10字以內。"},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
+            ]}
+        ])
+        preview_text = preview_response.text.strip()
+
+        # 根據預判分類決定角色語氣
+        if any(word in preview_text for word in ["手", "腳", "傷", "紅腫", "瘀青", "醫療", "外傷", "牙齒"]):
+            prompt = "你是具備醫療常識的 AI 小護士，請根據圖片推論是否有可見異常並簡短說明可能的健康問題（不超過3句話）。此為 AI 分析建議，無法替代專業醫療診斷。"
+        elif any(word in preview_text for word in ["數學", "國語", "題目", "公式", "文字"]):
+            prompt = "你是一位 AI 小老師，請協助解釋這張圖片中的題目或文字內容，並以繁體中文簡潔回答（不超過3句話）。"
+        elif any(word in preview_text for word in ["植物", "花", "食物", "餐點", "家裡", "房間"]):
+            prompt = "你是 AI 生活助理，請用輕鬆語氣描述圖片中的內容，並給予實用或有趣的說明（不超過3句話）。"
+        else:
+            prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過3句話）。"
+
+        # 正式分析
         response = model.generate_content([
-            {
-                "role": "user",
-                "parts": [
-                    {"text": "你是具備醫療常識的 AI 小護士，請嘗試根據圖片判斷是否有外傷、紅腫、瘀青、割傷或其他可見異常，並根據常見症狀推論可能的健康問題。請以繁體中文描述，並附上提醒：此為 AI 分析建議，無法替代專業醫療診斷。"},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
-                ]
-            }
+            {"role": "user", "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
+            ]}
         ])
         reply = response.text.strip()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
@@ -160,11 +177,7 @@ def handle_image(event):
         except:
             pass
 
-@handler.add(MessageEvent)
-def handle_other(event):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請傳送文字或圖片。輸入『角色選單』可切換角色 🧠"))
-
-@app.route("/static/images/<filename>")
+@route("/static/images/<filename>")
 def serve_image(filename):
     return send_from_directory(TEMP_DIR, filename)
 
