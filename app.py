@@ -152,13 +152,13 @@ def handle_image(event):
         preview_text = preview_response.text.strip()
 
         if any(word in preview_text for word in ["手", "腳", "傷", "紅腫", "瘀青", "醫療", "外傷", "牙齒"]):
-            prompt = "你是具備醫療常識的 AI 小護士，請根據圖片推論是否有可見異常並簡短說明可能的健康問題（不超過3句話）。此為 AI 分析建議，無法替代專業醫療診斷。"
+            prompt = "你是具備醫療常識的 AI 小護士，請根據圖片推論是否有可見異常並清楚說明可能的健康問題與建議（不超過 5 句話）。此為 AI 分析建議，無法替代專業醫療診斷。"
         elif any(word in preview_text for word in ["數學", "國語", "題目", "公式", "文字"]):
-            prompt = "你是一位 AI 小老師，請協助解釋這張圖片中的題目或文字內容，並以繁體中文簡潔回答（不超過3句話）。"
+            prompt = "你是一位 AI 小老師，請協助解釋這張圖片中的題目或文字內容，並以繁體中文簡潔回答（不超過 5 句話）。"
         elif any(word in preview_text for word in ["植物", "花", "食物", "餐點", "家裡", "房間"]):
-            prompt = "你是 AI 生活助理，請用輕鬆語氣描述圖片中的內容，並給予實用或有趣的說明（不超過3句話）。"
+            prompt = "你是 AI 生活助理，請用輕鬆語氣描述圖片中的內容，並給予實用或有趣的說明（不超過 5 句話）。"
         else:
-            prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過3句話）。"
+            prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過 5 句話）。"
 
         response = model.generate_content([
             {"role": "user", "parts": [
