@@ -97,7 +97,7 @@ def handle_image_message(event):
             {"role": "user", "parts": [
                 {"text": "請分析這張圖片的內容，若為非中文請翻譯並給出完整繁體中文說明。"},
                 {"inline_data": {"mime_type": "image/jpeg", "data": open(image_path, "rb").read() }}
-            ]
+            ]}
         ])
         reply_text = response.text.strip()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
