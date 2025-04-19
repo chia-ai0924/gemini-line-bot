@@ -18,10 +18,11 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# ✅ Gemini 設定（使用 Service Account 登入）
+# ✅ Gemini 設定（使用 Service Account 登入，適用 0.6.0）
 service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
-model = genai.GenerativeModel("gemini-1.5-pro-vision", credentials=credentials)
+genai.configure(credentials=credentials)
+model = genai.GenerativeModel("gemini-1.5-pro-vision")
 
 # ✅ 圖片暫存資料夾
 TEMP_DIR = "static/images"
