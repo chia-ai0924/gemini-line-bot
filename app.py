@@ -1,113 +1,118 @@
+# ✅ 最終穩定版 app.py，支援：
+# - Gemini Vision 圖片分析（Service Account 登入）
+# - 多輪記憶
+# - 繁體中文回覆
+# - 自動辨識圖片、清除圖片、回覆描述
+
 import os
 import json
+import shutil
 import requests
-import time
-from flask import Flask, request, abort, send_from_directory
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
 import google.generativeai as genai
+from flask import Flask, request, abort, send_from_directory
 from google.oauth2 import service_account
-from datetime import datetime
-import threading
+from linebot import LineBotApi, WebhookHandler
+from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage
+
+# ✅ 額外小建議：印出目前 generativeai 套件版本，方便除錯
+print("\n✅ Current generativeai version:", genai.__version__)
 
 app = Flask(__name__)
 
-# 設定 Line API
-line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
+# ✅ 設定 LINE 機器人金鑰
+line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
+handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# 設定 Gemini Service Account
-service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"))
+# ✅ 設定 Gemini Service Account 登入
+SERVICE_ACCOUNT_INFO = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    SERVICE_ACCOUNT_INFO,
+    scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
-genai_client = genai.GenerativeModel(
-    model_name="models/gemini-1.5-pro-vision",
-    client_options={"api_endpoint": "https://generativelanguage.googleapis.com"},
+
+# ✅ 初始化 Gemini 模型
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-pro-vision",
     credentials=credentials,
+    client_options={"api_endpoint": "https://generativelanguage.googleapis.com"}
 )
 
-# 建立圖片暫存資料夾
-IMAGE_DIR = "./static/images"
-if not os.path.exists(IMAGE_DIR):
-    os.makedirs(IMAGE_DIR)
+# ✅ 暫存圖片資料夾
+TEMP_DIR = "static/images"
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-# 自動刪除圖片
-def delete_file_later(filepath, delay=180):
-    def delete():
-        time.sleep(delay)
-        if os.path.exists(filepath):
-            os.remove(filepath)
-    threading.Thread(target=delete).start()
+# ✅ 使用者對話歷史記憶
+user_histories = {}
 
-@app.route("/static/images/<path:filename>")
-def serve_image(filename):
-    return send_from_directory(IMAGE_DIR, filename)
-
-@app.route("/callback", methods=["POST"])
+@app.route("/callback", methods=['POST'])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-
-    return "OK"
-
-@handler.add(MessageEvent, message=ImageMessage)
-def handle_image(event):
-    try:
-        # 抓取圖片
-        message_id = event.message.id
-        image_content = line_bot_api.get_message_content(message_id).content
-        filename = f"{message_id}.jpg"
-        filepath = os.path.join(IMAGE_DIR, filename)
-        with open(filepath, "wb") as f:
-            f.write(image_content)
-
-        delete_file_later(filepath)
-
-        # 建立圖片網址（含 token 保護可加入）
-        image_url = f"{request.url_root}static/images/{filename}"
-
-        # 發送到 Gemini 分析
-        response = genai_client.generate_content([
-            {"text": "請用繁體中文說明這張圖片的內容，並給出有幫助的分析。"},
-            {"image_url": image_url}
-        ])
-        reply_text = response.text.strip()
-        line_bot_api.reply_message(
-            event.reply_token, TextSendMessage(text=reply_text)
-        )
-
     except Exception as e:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=f"⚠️ 圖片處理時發生錯誤，請稍後再試。\n\n{str(e)}"),
-        )
+        print("Webhook Error:", e)
+        abort(400)
+    return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
-def handle_text(event):
-    try:
-        user_input = event.message.text
+def handle_text_message(event):
+    user_id = event.source.user_id
+    user_input = event.message.text
 
-        response = genai_client.generate_content([
-            {"text": f"請用繁體中文回答以下問題：{user_input}"}
+    # 建立使用者的歷史對話
+    history = user_histories.get(user_id, [])
+    history.append({"role": "user", "parts": [user_input]})
+
+    try:
+        response = model.generate_content(history)
+        reply_text = response.text.strip()
+        history.append({"role": "model", "parts": [reply_text]})
+        user_histories[user_id] = history[-10:]  # 只保留最近10輪
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+    except Exception as e:
+        print("Gemini text error:", e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 發生錯誤，請稍後再試。"))
+
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image_message(event):
+    user_id = event.source.user_id
+    message_id = event.message.id
+
+    # ✅ 下載圖片
+    image_path = f"{TEMP_DIR}/{message_id}.jpg"
+    try:
+        image_content = line_bot_api.get_message_content(message_id).content
+        with open(image_path, "wb") as f:
+            f.write(image_content)
+    except Exception as e:
+        print("Image download error:", e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 圖片下載失敗。"))
+        return
+
+    # ✅ 傳給 Gemini Vision 分析
+    image_url = request.url_root + image_path
+    try:
+        response = model.generate_content([
+            {"role": "user", "parts": [
+                {"text": "請分析這張圖片的內容，若為非中文請翻譯並給出完整繁體中文說明。"},
+                {"inline_data": {"mime_type": "image/jpeg", "data": open(image_path, "rb").read() }}
+            ]
         ])
         reply_text = response.text.strip()
-        line_bot_api.reply_message(
-            event.reply_token, TextSendMessage(text=reply_text)
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
     except Exception as e:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=f"⚠️ 回覆時發生錯誤，請稍後再試。\n\n{str(e)}"),
-        )
+        print("Gemini image error:", e)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 圖片分析失敗。"))
+    finally:
+        try:
+            os.remove(image_path)
+        except:
+            pass
+
+@app.route("/static/images/<filename>")
+def serve_image(filename):
+    return send_from_directory(TEMP_DIR, filename)
 
 if __name__ == "__main__":
-    app.run()
-
+    app.run(debug=True)
