@@ -1,4 +1,4 @@
-# ✅ 加入 Gemini 文字回覆 + 圖片分析 + 多輪記憶 + 角色切換按鈕 + 選單處理 + 自動建立 Rich Menu
+# ✅ Gemini 1.5 Pro Vision with Service Account 登入方式（v1beta 相容）
 
 import os
 import json
@@ -10,7 +10,7 @@ from google.oauth2 import service_account
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import (MessageEvent, TextMessage, ImageMessage,
                             TextSendMessage, TemplateSendMessage, ButtonsTemplate,
-                            PostbackAction, PostbackEvent, RichMenu, RichMenuArea, URIAction, PostbackAction)
+                            PostbackAction, PostbackEvent, RichMenu, RichMenuArea, URIAction)
 
 app = Flask(__name__)
 
@@ -18,63 +18,24 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# ✅ Gemini 設定（使用 Service Account 登入，適用 0.6.0）
+# ✅ Gemini 設定（Service Account + v1beta 寫法）
 service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials)
-model = genai.GenerativeModel("gemini-1.5-pro-vision")
+model = genai.GenerativeModel("models/gemini-pro-vision")
 
 # ✅ 圖片暫存資料夾
 TEMP_DIR = "static/images"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# ✅ 使用者對話記憶
 user_histories = {}
-user_roles = {}  # 儲存使用者選擇的角色
+user_roles = {}
 
-# ✅ 角色指令選單
 ROLES = {
     "nurse": "你是親切專業的 AI 小護士，會給健康建議。",
     "teacher": "你是溫柔博學的 AI 小老師，幫助學生理解知識。",
     "assistant": "你是高效率的生活助理，協助處理日常問題。"
 }
-
-# ✅ 啟動時建立 Rich Menu（只會執行一次）
-def create_rich_menu():
-    try:
-        menus = line_bot_api.get_rich_menu_list()
-        if menus:
-            print("已存在 Rich Menu，略過建立")
-            return
-
-        rich_menu = RichMenu(
-            size={"width": 2500, "height": 1686},
-            selected=True,
-            name="角色選單",
-            chat_bar_text="點我切換角色",
-            areas=[
-                RichMenuArea(
-                    bounds={"x": 0, "y": 0, "width": 833, "height": 1686},
-                    action=PostbackAction(label="🩺 小護士", data="role_nurse")
-                ),
-                RichMenuArea(
-                    bounds={"x": 834, "y": 0, "width": 833, "height": 1686},
-                    action=PostbackAction(label="📚 小老師", data="role_teacher")
-                ),
-                RichMenuArea(
-                    bounds={"x": 1667, "y": 0, "width": 833, "height": 1686},
-                    action=PostbackAction(label="🧭 助理", data="role_assistant")
-                )
-            ]
-        )
-
-        rich_menu_id = line_bot_api.create_rich_menu(rich_menu)
-        with open("角色選單.png", "rb") as f:
-            line_bot_api.set_rich_menu_image(rich_menu_id, "image/png", f)
-        line_bot_api.set_default_rich_menu(rich_menu_id)
-        print("✅ Rich Menu 已建立並套用")
-    except Exception as e:
-        print("Rich Menu 建立失敗:", e)
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -145,12 +106,15 @@ def handle_image(event):
         with open(image_path, "wb") as f:
             f.write(content)
 
+        with open(image_path, "rb") as image_file:
+            image_bytes = image_file.read()
+
         response = model.generate_content([
             {
                 "role": "user",
                 "parts": [
-                    {"text": "請分析這張圖片的內容，若非中文請翻譯並以繁體中文說明："},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": open(image_path, "rb").read()}}
+                    {"text": "請分析這張圖片的內容，若非中文請翻譯並以繁體中文說明。"},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
                 ]
             }
         ])
@@ -174,6 +138,5 @@ def serve_image(filename):
     return send_from_directory(TEMP_DIR, filename)
 
 if __name__ == '__main__':
-    create_rich_menu()
     app.run(debug=True)
 
