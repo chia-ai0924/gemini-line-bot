@@ -23,19 +23,9 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# ✅ 設定 Gemini Service Account 登入
-SERVICE_ACCOUNT_INFO = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
-credentials = service_account.Credentials.from_service_account_info(
-    SERVICE_ACCOUNT_INFO,
-    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-)
-
-# ✅ 初始化 Gemini 模型
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-pro-vision",
-    credentials=credentials,
-    client_options={"api_endpoint": "https://generativelanguage.googleapis.com"}
-)
+# ✅ 初始化 Gemini 模型（使用 API Key 方式）
+genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
+model = genai.GenerativeModel(model_name="gemini-1.5-pro-vision")
 
 # ✅ 暫存圖片資料夾
 TEMP_DIR = "static/images"
@@ -91,13 +81,20 @@ def handle_image_message(event):
         return
 
     # ✅ 傳給 Gemini Vision 分析
-    image_url = request.url_root + image_path
     try:
         response = model.generate_content([
-            {"role": "user", "parts": [
-                {"text": "請分析這張圖片的內容，若為非中文請翻譯並給出完整繁體中文說明。"},
-                {"inline_data": {"mime_type": "image/jpeg", "data": open(image_path, "rb").read() }}
-            ]}
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "請分析這張圖片的內容，若為非中文請翻譯並給出完整繁體中文說明。"},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": open(image_path, "rb").read()
+                        }
+                    }
+                ]
+            }
         ])
         reply_text = response.text.strip()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
