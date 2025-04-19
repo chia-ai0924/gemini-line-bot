@@ -1,4 +1,4 @@
-# ✅ Gemini 1.5 Pro (支援 Vision) with Service Account 登入（v1beta 相容）
+# ✅ Gemini 1.5 Pro (支援 Vision) with Service Account 登入（v1）
 
 import os
 import json
@@ -19,7 +19,7 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 
-# ✅ Gemini 設定（Service Account + v1beta）
+# ✅ Gemini 設定（Service Account + v1）
 service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials)
@@ -111,17 +111,13 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = [
-        {"role": "system", "parts": [system_role]},
-        *history,
-        {"role": "user", "parts": [msg]}
-    ]
+    user_input = f"你現在的身份是：{system_role}\n\n使用者說：{msg}"
 
     try:
-        response = model.generate_content(messages)
+        response = model.generate_content([user_input])
         reply = response.text.strip()
-        history.append({"role": "user", "parts": [msg]})
-        history.append({"role": "model", "parts": [reply]})
+        history.append(msg)
+        history.append(reply)
         user_histories[user_id] = history[-10:]
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     except Exception as e:
@@ -145,11 +141,8 @@ def handle_image(event):
 
         response = model.generate_content([
             {
-                "role": "user",
-                "parts": [
-                    {"text": "你是具備醫療常識的 AI 小護士，請嘗試根據圖片判斷是否有外傷、紅腫、瘀青、割傷或其他可見異常，並根據常見症狀推論可能的健康問題。請以繁體中文描述，並附上提醒：此為 AI 分析建議，無法替代專業醫療診斷。"},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
-                ]
+                "text": "你是具備醫療常識的 AI 小護士，請嘗試根據圖片判斷是否有外傷、紅腫、瘀青、割傷或其他可見異常，並根據常見症狀推論可能的健康問題。請以繁體中文描述，並附上提醒：此為 AI 分析建議，無法替代專業醫療診斷。",
+                "inline_data": {"mime_type": "image/jpeg", "data": image_bytes}
             }
         ])
         reply = response.text.strip()
