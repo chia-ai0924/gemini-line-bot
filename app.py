@@ -1,7 +1,8 @@
-# ✅ Gemini 1.5 Pro Vision with Service Account 登入方式（v1beta 相容）
+# ✅ Gemini 1.5 Pro Vision with Service Account 登入方式（v1beta 相容）+ 模型列印 + 詳細錯誤印出
 
 import os
 import json
+import traceback
 import requests
 import shutil
 import google.generativeai as genai
@@ -23,6 +24,14 @@ service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials)
 model = genai.GenerativeModel("models/gemini-pro-vision")
+
+# ✅ 印出可用模型清單（啟動時）
+try:
+    print("\n📋 可用模型清單：")
+    for m in genai.list_models():
+        print("✅", m.name)
+except Exception as e:
+    print("❌ 模型列印錯誤：", e)
 
 # ✅ 圖片暫存資料夾
 TEMP_DIR = "static/images"
@@ -93,6 +102,7 @@ def handle_text_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     except Exception as e:
         print("Text error:", e)
+        traceback.print_exc()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 回覆錯誤，請稍後再試。"))
 
 @handler.add(MessageEvent, message=ImageMessage)
@@ -122,6 +132,7 @@ def handle_image(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     except Exception as e:
         print("Image error:", e)
+        traceback.print_exc()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 圖片分析錯誤。"))
     finally:
         try:
