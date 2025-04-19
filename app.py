@@ -23,7 +23,7 @@ handler = WebhookHandler(os.environ.get("LINE_CHANNEL_SECRET"))
 service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials)
-model = genai.GenerativeModel("models/gemini-1.5-pro-latest")  # ✅ 正確模型名稱
+model = genai.GenerativeModel("models/gemini-1.5-pro-latest")
 
 # ✅ 印出可用模型清單
 try:
@@ -46,6 +46,12 @@ ROLES = {
     "assistant": "你是高效率的生活助理，協助處理日常問題。"
 }
 
+ROLE_WELCOME = {
+    "nurse": "我是你的專屬 AI 小護士，我會比對一切有關醫療疾病相關的資訊，整合你的需求來做回應。請問有什麼需要幫忙的嗎？",
+    "teacher": "嗨，我是 AI 小老師，準備好一起學習新知識了嗎？我可以幫你解釋課題、複習觀念，也可以回答你對世界的各種好奇喔。",
+    "assistant": "你好！我是你的 AI 生活助理，可以幫你查資訊、列待辦清單、提醒重要事項，讓生活更有效率。請問今天需要我幫忙什麼呢？"
+}
+
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -65,15 +71,30 @@ def handle_postback(event):
         role_key = data.replace("role_", "")
         if role_key in ROLES:
             user_roles[user_id] = ROLES[role_key]
+            welcome = ROLE_WELCOME.get(role_key, "你現在的 AI 角色已更新。")
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text=f"✅ 角色已切換為：{role_key}，你現在的 AI 身分是：{ROLES[role_key]}")
+                TextSendMessage(text=welcome)
             )
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
     user_id = event.source.user_id
     msg = event.message.text.strip()
+
+    if msg in ["🩺 AI 小護士", "📚 AI 小老師", "🧭 生活助理"]:
+        role_key = {
+            "🩺 AI 小護士": "nurse",
+            "📚 AI 小老師": "teacher",
+            "🧭 生活助理": "assistant"
+        }[msg]
+        user_roles[user_id] = ROLES[role_key]
+        welcome = ROLE_WELCOME.get(role_key, f"✅ 你現在的 AI 身分是：{ROLES[role_key]}")
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=welcome)
+        )
+        return
 
     if msg == "角色選單":
         buttons_template = ButtonsTemplate(
@@ -90,8 +111,7 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = history + [{"role": "user", "parts": [system_role + "\n" + msg]}]
-    messages.append({"role": "user", "parts": [msg]})
+    messages = history + [{"role": "user", "parts": [f"{system_role}\n{msg}"]}]
 
     try:
         response = model.generate_content(messages)
@@ -150,7 +170,3 @@ def serve_image(filename):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
-
-
-
