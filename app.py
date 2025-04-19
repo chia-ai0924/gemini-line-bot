@@ -157,6 +157,8 @@ def handle_image(event):
             prompt = "你是一位 AI 小老師，請協助解釋這張圖片中的題目或文字內容，並以繁體中文簡潔回答（不超過 5 句話）。"
         elif any(word in preview_text for word in ["植物", "花", "食物", "餐點", "家裡", "房間"]):
             prompt = "你是 AI 生活助理，請用輕鬆語氣描述圖片中的內容，並給予實用或有趣的說明（不超過 5 句話）。"
+        elif any(word in preview_text for word in ["日文", "メニュー", "カタカナ", "ひらがな"]):
+            prompt = "這張圖片是日文內容，請翻譯為繁體中文並以輕鬆自然的語氣簡短整理重點。回覆不超過 3 句話，幫助使用者快速理解重點即可。"
         else:
             prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過 5 句話）。"
 
@@ -184,3 +186,4 @@ def serve_image(filename):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
