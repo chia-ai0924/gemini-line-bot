@@ -111,7 +111,11 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = [{"role": "user", "parts": [system_role]}] + history + [{"role": "user", "parts": [msg]}]
+    messages = [
+        {"role": "user", "parts": [f"你現在的角色是：{system_role}。請用這個角色來回答問題。"]},
+        *history,
+        {"role": "user", "parts": [msg]}
+    ]
 
     try:
         response = model.generate_content(messages)
@@ -139,7 +143,6 @@ def handle_image(event):
         with open(image_path, "rb") as image_file:
             image_bytes = image_file.read()
 
-        # 初步分析圖片內容用於分類用途
         preview_response = model.generate_content([
             {"role": "user", "parts": [
                 {"text": "這張圖片的內容大致上是什麼？請用繁體中文簡短說明，約10字以內。"},
@@ -148,7 +151,6 @@ def handle_image(event):
         ])
         preview_text = preview_response.text.strip()
 
-        # 根據預判分類決定角色語氣
         if any(word in preview_text for word in ["手", "腳", "傷", "紅腫", "瘀青", "醫療", "外傷", "牙齒"]):
             prompt = "你是具備醫療常識的 AI 小護士，請根據圖片推論是否有可見異常並簡短說明可能的健康問題（不超過3句話）。此為 AI 分析建議，無法替代專業醫療診斷。"
         elif any(word in preview_text for word in ["數學", "國語", "題目", "公式", "文字"]):
@@ -158,7 +160,6 @@ def handle_image(event):
         else:
             prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過3句話）。"
 
-        # 正式分析
         response = model.generate_content([
             {"role": "user", "parts": [
                 {"text": prompt},
@@ -177,10 +178,9 @@ def handle_image(event):
         except:
             pass
 
-@route("/static/images/<filename>")
+@app.route("/static/images/<filename>")
 def serve_image(filename):
     return send_from_directory(TEMP_DIR, filename)
 
 if __name__ == '__main__':
     app.run(debug=True)
-
