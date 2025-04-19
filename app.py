@@ -90,7 +90,7 @@ def handle_text_message(event):
 
     history = user_histories.get(user_id, [])
     system_role = user_roles.get(user_id, ROLES["assistant"])
-    messages = [{"role": "system", "parts": [system_role]}] + history
+    messages = history + [{"role": "user", "parts": [system_role + "\n" + msg]}]
     messages.append({"role": "user", "parts": [msg]})
 
     try:
@@ -150,6 +150,7 @@ def serve_image(filename):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
 
 
 
