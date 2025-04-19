@@ -8,4 +8,5 @@ google-cloud-storage
 google-generativeai==0.6.0
 python-dotenv
 Pillow
-gunicorn
+gunicorn   補上
+
