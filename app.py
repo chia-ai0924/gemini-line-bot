@@ -188,6 +188,15 @@ def handle_image(event):
     except Exception as e:
         print("圖片最終推送失敗：", e)
 
+# Gemini 狀態測試路由
+@app.route("/test-gemini")
+def test_gemini():
+    try:
+        result = model.generate_content("請用繁體中文說一句話測試")
+        return result.text
+    except Exception as e:
+        return f"❌ 錯誤：{e}"
+
 # 測試首頁
 @app.route("/")
 def home():
@@ -195,4 +204,5 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
 
