@@ -191,9 +191,25 @@ def handle_image(event):
 # Gemini 狀態測試路由
 @app.route("/test-gemini")
 def test_gemini():
-    try:
-        result = model.generate_content("請用繁體中文說一句話測試")
-        return result.text
+    def run_gemini():
+        try:
+            result = model.generate_content("請用繁體中文說一句話測試")
+            return result.text
+        except Exception as e:
+            return f"❌ 錯誤：{e}"
+
+    result_holder = {}
+    def run():
+        result_holder["response"] = run_gemini()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(timeout=10)
+
+    if "response" in result_holder:
+        return result_holder["response"]
+    else:
+        return "❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。"
     except Exception as e:
         return f"❌ 錯誤：{e}"
 
@@ -204,5 +220,6 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
 
 
