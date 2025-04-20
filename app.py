@@ -8,6 +8,8 @@ import threading
 import time
 import uuid
 import shutil
+import socket
+from datetime import datetime
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
@@ -73,22 +75,15 @@ def process_text_gemini(uid, user_message, history, prompt):
     try:
         # 醫療相關關鍵字強化判斷
         medical_keywords = [
-    # 常見外觀部位
-    "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
-    "手", "手指", "手掌", "手臂", "指甲",
-    "腳", "腳趾", "膝蓋", "大腿", "小腿", "腳底", "腳踝",
-    "背", "腰", "胸部", "肚子", "腹部",
-
-    # 內部器官與系統
-    "器官", "心臟", "肝臟", "肺", "胃", "腸", "腎臟", "膀胱",
-    "子宮", "卵巢", "睪丸", "神經", "骨頭", "肌肉", "皮膚",
-
-    # 症狀與狀態
-    "紅腫", "瘀青", "腫脹", "發炎", "痠痛", "疼痛", "癢", "流血", "破皮",
-
-    # 整體描述
-    "身體", "健康", "外傷", "生病", "不舒服", "不適"
-]
+            "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
+            "手", "手指", "手掌", "手臂", "指甲",
+            "腳", "腳趾", "膝蓋", "大腿", "小腿", "腳底", "腳踝",
+            "背", "腰", "胸部", "肚子", "腹部",
+            "器官", "心臟", "肝臟", "肺", "胃", "腸", "腎臟", "膀胱",
+            "子宮", "卵巢", "睪丸", "神經", "骨頭", "肌肉", "皮膚",
+            "紅腫", "瘀青", "腫脹", "發炎", "痠痛", "疼痛", "癢", "流血", "破皮",
+            "身體", "健康", "外傷", "生病", "不舒服", "不適"
+        ]
         if any(word in user_message for word in medical_keywords):
             prompt = get_role_prompt("nurse")
 
@@ -165,7 +160,6 @@ def handle_image(event):
         ])
         preview_text = preview.text.strip()
 
-        # 判斷是否為醫療類型圖片（部位 + 症狀 同時存在）
         if any(p in preview_text for p in body_parts) and any(s in preview_text for s in symptom_words):
             system_prompt = get_role_prompt("nurse")
         else:
@@ -193,10 +187,14 @@ def handle_image(event):
 def test_gemini():
     def run_gemini():
         try:
+            start = time.time()
             result = model.generate_content("請用繁體中文說一句話測試")
-            return result.text
+            duration = round(time.time() - start, 2)
+            hostname = socket.gethostname()
+            return f"✅ 測試成功（{duration} 秒），機器：{hostname}\n\n{result.text}"
         except Exception as e:
-            return f"❌ 錯誤：{e}"
+            hostname = socket.gethostname()
+            return f"❌ 錯誤：{e}（host: {hostname}）"
 
     result_holder = {}
     def run():
@@ -206,9 +204,11 @@ def test_gemini():
     thread.start()
     thread.join(timeout=10)
 
-    return result_holder.get("response", "❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。")
+    if "response" not in result_holder:
+        return f"❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。（host: {socket.gethostname()}）"
 
-# 測試目前可用 Gemini 模型
+    return result_holder["response"]
+
 @app.route("/test-models")
 def test_models():
     try:
@@ -218,7 +218,6 @@ def test_models():
     except Exception as e:
         return f"❌ 錯誤：{e}"
 
-# 安全驗證用：查看憑證資訊（不含私密金鑰）
 @app.route("/test-credentials")
 def test_credentials():
     try:
@@ -230,11 +229,11 @@ def test_credentials():
     except Exception as e:
         return f"❌ 錯誤：{e}"
 
-# 測試首頁
 @app.route("/")
 def home():
     return "Gemini LINE Bot 運行中"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
 
