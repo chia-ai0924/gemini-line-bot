@@ -8,7 +8,6 @@ import threading
 import time
 import uuid
 import shutil
-import concurrent.futures
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
@@ -24,15 +23,6 @@ service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials, client_options={"api_endpoint": "https://generativeai.googleapis.com"})
 model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest", generation_config={"temperature": 0.7})
-
-# Gemini 安全執行包裝器（含 timeout）
-def safe_generate_content(parts, timeout=10):
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(model.generate_content, parts)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            raise TimeoutError("Gemini API 回應逾時")
 
 # 建立使用者對話記憶 dict
 user_histories = {}
@@ -78,20 +68,31 @@ def handle_postback(event):
         role_name = {"nurse": "AI 小護士", "teacher": "AI 小老師", "assistant": "生活助理"}[data]
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"你現在的角色是：{role_name}，有什麼我可以幫忙的嗎？"))
 
-# 處理文字訊息
-@handler.add(MessageEvent, message=TextMessage)
-def handle_text(event):
-    uid = event.source.user_id
-    user_message = event.message.text.strip()
-
-    role = user_roles.get(uid, "assistant")
-    prompt = get_role_prompt(role)
-
-    history = user_histories.get(uid, [])[-8:]
-    history.append({"role": "user", "parts": [user_message]})
-
+# 處理文字訊息（使用非阻塞 thread）
+def process_text_gemini(uid, user_message, history, prompt):
     try:
-        response = safe_generate_content([{"role": "system", "parts": [prompt]}] + history)
+        # 醫療相關關鍵字強化判斷
+        medical_keywords = [
+    # 常見外觀部位
+    "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
+    "手", "手指", "手掌", "手臂", "指甲",
+    "腳", "腳趾", "膝蓋", "大腿", "小腿", "腳底", "腳踝",
+    "背", "腰", "胸部", "肚子", "腹部",
+
+    # 內部器官與系統
+    "器官", "心臟", "肝臟", "肺", "胃", "腸", "腎臟", "膀胱",
+    "子宮", "卵巢", "睪丸", "神經", "骨頭", "肌肉", "皮膚",
+
+    # 症狀與狀態
+    "紅腫", "瘀青", "腫脹", "發炎", "痠痛", "疼痛", "癢", "流血", "破皮",
+
+    # 整體描述
+    "身體", "健康", "外傷", "生病", "不舒服", "不適"
+]
+        if any(word in user_message for word in medical_keywords):
+            prompt = get_role_prompt("nurse")
+
+        response = model.generate_content([{"role": "system", "parts": [prompt]}] + history)
         reply_text = response.text.strip()
     except Exception as e:
         print("文字訊息錯誤：", e)
@@ -99,10 +100,41 @@ def handle_text(event):
 
     history.append({"role": "model", "parts": [reply_text]})
     user_histories[uid] = history
+    try:
+        line_bot_api.push_message(uid, TextSendMessage(text=reply_text))
+    except Exception as e:
+        print("最終回覆推送失敗：", e)
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text(event):
+    uid = event.source.user_id
+    user_message = event.message.text.strip()
+    role = user_roles.get(uid, "assistant")
+    prompt = get_role_prompt(role)
+    history = user_histories.get(uid, [])[-8:]
+    history.append({"role": "user", "parts": [user_message]})
+    try:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔄 正在處理中，請稍候..."))
+    except Exception as e:
+        print("預先提示錯誤：", e)
+    threading.Thread(target=process_text_gemini, args=(uid, user_message, history, prompt)).start()
 
-# 處理圖片訊息（分類角色 + 翻譯文字 + 三句補充）
+# 圖片醫療預覽關鍵字判斷
+body_parts = [
+    "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
+    "手", "手指", "手掌", "手臂", "指甲",
+    "腳", "腳趾", "膝蓋", "大腿", "小腿", "腳底", "腳踝",
+    "背", "腰", "胸部", "肚子", "腹部",
+    "心臟", "肝臟", "肺", "胃", "腸", "腎臟", "膀胱",
+    "子宮", "卵巢", "睪丸", "神經", "骨頭", "肌肉", "皮膚",
+    "器官", "身體"
+]
+
+symptom_words = [
+    "紅腫", "瘀青", "腫脹", "發炎", "痠痛", "疼痛", "癢", "流血", "破皮",
+    "外傷", "生病", "不舒服", "不適", "受傷"
+]
+
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     uid = event.source.user_id
@@ -120,7 +152,12 @@ def handle_image(event):
         image_bytes = img_file.read()
 
     try:
-        preview = safe_generate_content([
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔍 分析圖片中，請稍候..."))
+    except Exception as e:
+        print("圖片處理提示錯誤：", e)
+
+    try:
+        preview = model.generate_content([
             {"role": "user", "parts": [
                 {"text": "請用繁體中文說明這張圖片大致上是什麼類型的內容，約 10 字以內"},
                 {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
@@ -128,38 +165,28 @@ def handle_image(event):
         ])
         preview_text = preview.text.strip()
 
-        if any(word in preview_text for word in ["手", "腳", "傷", "紅腫", "瘀青", "牙齒"]):
+        # 判斷是否為醫療類型圖片（部位 + 症狀 同時存在）
+        if any(p in preview_text for p in body_parts) and any(s in preview_text for s in symptom_words):
             system_prompt = get_role_prompt("nurse")
-        elif any(word in preview_text for word in ["數學", "國語", "題目", "公式", "文字"]):
-            system_prompt = get_role_prompt("teacher")
-        elif any(word in preview_text for word in ["植物", "花", "食物", "餐點", "家裡", "房間"]):
-            system_prompt = get_role_prompt("assistant")
         else:
-            system_prompt = "請幫我翻譯這張圖片的所有文字為繁體中文，並補充 3 句建議或提醒。"
+            system_prompt = get_role_prompt(user_roles.get(uid, "assistant"))
 
-        translate_response = safe_generate_content([
+        full_response = model.generate_content([
             {"role": "system", "parts": [system_prompt]},
             {"role": "user", "parts": [
-                {"text": "請幫我將圖片中的所有文字完整翻譯為繁體中文。"},
+                {"text": "請幫我將這張圖片的內容完整翻譯為繁體中文，並補充 3 句建議或提醒。"},
                 {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
             ]}
         ])
-        translated_text = translate_response.text.strip()
-
-        summary_response = safe_generate_content([
-            {"role": "user", "parts": [
-                {"text": f"以下是圖片翻譯後的文字內容：{translated_text}\n請根據這段內容，補充 3 句繁體中文的說明、建議或提醒。"}
-            ]}
-        ])
-        supplement = summary_response.text.strip()
-
-        reply_text = f"📘 翻譯結果：\n{translated_text}\n\n💡 小提醒：\n{supplement}"
-
+        reply_text = full_response.text.strip()
     except Exception as e:
-        print("圖片訊息錯誤：", e)
-        reply_text = "❌ 圖片分析失敗或回應逾時，請稍後再試一次。"
+        print("圖片分析錯誤：", e)
+        reply_text = "❌ 圖片分析失敗或逾時，請稍後再試一次。"
 
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+    try:
+        line_bot_api.push_message(uid, TextSendMessage(text=reply_text))
+    except Exception as e:
+        print("圖片最終推送失敗：", e)
 
 # 測試首頁
 @app.route("/")
@@ -168,3 +195,4 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
