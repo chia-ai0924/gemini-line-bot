@@ -158,7 +158,7 @@ def handle_image(event):
         elif any(word in preview_text for word in ["植物", "花", "食物", "餐點", "家裡", "房間"]):
             prompt = "你是 AI 生活助理，請用輕鬆語氣描述圖片中的內容，並給予實用或有趣的說明（不超過 5 句話）。"
         elif any(word in preview_text for word in ["日文", "メニュー", "カタカナ", "ひらがな"]):
-            prompt = "這張圖片是日文內容，請翻譯為繁體中文並以輕鬆自然的語氣簡短整理重點。回覆不超過 3 句話，幫助使用者快速理解重點即可。"
+            prompt = "這張圖片是日文內容，請先完整翻譯成繁體中文，接著用輕鬆自然的語氣以不超過 3 句話整理重點摘要。"
         else:
             prompt = "請描述這張圖片的內容，並使用繁體中文自然說明（不超過 5 句話）。"
 
@@ -170,6 +170,17 @@ def handle_image(event):
         ])
         reply = response.text.strip()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+
+        # ✅ 加入圖片回應內容進 user_histories，方便後續延續對話
+        history = user_histories.get(user_id, [])
+        history.append({"role": "user", "parts": ["（使用者傳送了一張圖片）"]})
+        history.append({"role": "model", "parts": [reply]})
+        user_histories[user_id] = history[-10:]
+
+    except Exception as e:
+        print("Image error:", e)
+        traceback.print_exc()
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ 圖片分析錯誤。"))
     except Exception as e:
         print("Image error:", e)
         traceback.print_exc()
