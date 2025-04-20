@@ -84,8 +84,8 @@ def handle_text(event):
         response = model.generate_content([{"role": "system", "parts": [prompt]}] + history)
         reply_text = response.text.strip()
     except Exception as e:
-        reply_text = f"❌ 回覆失敗：{e}"
-        print(e)
+        print("文字訊息錯誤：", e)
+        reply_text = "❌ 系統忙碌或出錯，請稍後再試一次。"
 
     history.append({"role": "model", "parts": [reply_text]})
     user_histories[uid] = history
@@ -150,8 +150,8 @@ def handle_image(event):
         reply_text = f"📘 翻譯結果：\n{translated_text}\n\n💡 小提醒：\n{supplement}"
 
     except Exception as e:
-        reply_text = f"❌ 圖片分析失敗：{e}"
-        print(e)
+        print("圖片訊息錯誤：", e)
+        reply_text = "❌ 圖片分析失敗，請稍後再試一次。"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
