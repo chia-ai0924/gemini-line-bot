@@ -206,12 +206,7 @@ def test_gemini():
     thread.start()
     thread.join(timeout=10)
 
-    if "response" in result_holder:
-        return result_holder["response"]
-    else:
-        return "❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。"
-    except Exception as e:
-        return f"❌ 錯誤：{e}"
+    return result_holder.get("response", "❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。")
 
 # 安全驗證用：查看憑證資訊（不含私密金鑰）
 @app.route("/test-credentials")
@@ -232,6 +227,5 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
 
 
