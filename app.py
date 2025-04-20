@@ -208,6 +208,16 @@ def test_gemini():
 
     return result_holder.get("response", "❌ 錯誤：Gemini 回應逾時或未完成，請稍後再試。")
 
+# 測試目前可用 Gemini 模型
+@app.route("/test-models")
+def test_models():
+    try:
+        models = genai.list_models()
+        model_names = [m.name for m in models]
+        return json.dumps(model_names, ensure_ascii=False)
+    except Exception as e:
+        return f"❌ 錯誤：{e}"
+
 # 安全驗證用：查看憑證資訊（不含私密金鑰）
 @app.route("/test-credentials")
 def test_credentials():
@@ -227,5 +237,4 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
 
