@@ -1,3 +1,5 @@
+# 部署測試註解：嘗試換機器 2025-04-21 04:44
+
 from flask import Flask, request, abort, send_from_directory
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, ImageMessage, TextSendMessage, PostbackEvent
