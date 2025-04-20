@@ -213,6 +213,18 @@ def test_gemini():
     except Exception as e:
         return f"❌ 錯誤：{e}"
 
+# 安全驗證用：查看憑證資訊（不含私密金鑰）
+@app.route("/test-credentials")
+def test_credentials():
+    try:
+        info = {
+            "project_id": credentials.project_id,
+            "client_email": credentials.service_account_email
+        }
+        return json.dumps(info, ensure_ascii=False)
+    except Exception as e:
+        return f"❌ 錯誤：{e}"
+
 # 測試首頁
 @app.route("/")
 def home():
