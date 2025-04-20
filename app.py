@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 import shutil
+import concurrent.futures
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
@@ -23,6 +24,15 @@ service_account_info = json.loads(os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON"))
 credentials = Credentials.from_service_account_info(service_account_info)
 genai.configure(credentials=credentials, client_options={"api_endpoint": "https://generativeai.googleapis.com"})
 model = genai.GenerativeModel(model_name="models/gemini-1.5-pro-latest", generation_config={"temperature": 0.7})
+
+# Gemini 安全執行包裝器（含 timeout）
+def safe_generate_content(parts, timeout=10):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(model.generate_content, parts)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            raise TimeoutError("Gemini API 回應逾時")
 
 # 建立使用者對話記憶 dict
 user_histories = {}
@@ -81,7 +91,7 @@ def handle_text(event):
     history.append({"role": "user", "parts": [user_message]})
 
     try:
-        response = model.generate_content([{"role": "system", "parts": [prompt]}] + history)
+        response = safe_generate_content([{"role": "system", "parts": [prompt]}] + history)
         reply_text = response.text.strip()
     except Exception as e:
         print("文字訊息錯誤：", e)
@@ -110,8 +120,7 @@ def handle_image(event):
         image_bytes = img_file.read()
 
     try:
-        # 預判圖片內容
-        preview = model.generate_content([
+        preview = safe_generate_content([
             {"role": "user", "parts": [
                 {"text": "請用繁體中文說明這張圖片大致上是什麼類型的內容，約 10 字以內"},
                 {"inline_data": {"mime_type": "image/jpeg", "data": image_bytes}}
@@ -119,7 +128,6 @@ def handle_image(event):
         ])
         preview_text = preview.text.strip()
 
-        # 根據圖片內容自動設定 prompt（角色風格）
         if any(word in preview_text for word in ["手", "腳", "傷", "紅腫", "瘀青", "牙齒"]):
             system_prompt = get_role_prompt("nurse")
         elif any(word in preview_text for word in ["數學", "國語", "題目", "公式", "文字"]):
@@ -129,8 +137,7 @@ def handle_image(event):
         else:
             system_prompt = "請幫我翻譯這張圖片的所有文字為繁體中文，並補充 3 句建議或提醒。"
 
-        # 圖片文字翻譯
-        translate_response = model.generate_content([
+        translate_response = safe_generate_content([
             {"role": "system", "parts": [system_prompt]},
             {"role": "user", "parts": [
                 {"text": "請幫我將圖片中的所有文字完整翻譯為繁體中文。"},
@@ -139,8 +146,7 @@ def handle_image(event):
         ])
         translated_text = translate_response.text.strip()
 
-        # 三句補充
-        summary_response = model.generate_content([
+        summary_response = safe_generate_content([
             {"role": "user", "parts": [
                 {"text": f"以下是圖片翻譯後的文字內容：{translated_text}\n請根據這段內容，補充 3 句繁體中文的說明、建議或提醒。"}
             ]}
@@ -151,7 +157,7 @@ def handle_image(event):
 
     except Exception as e:
         print("圖片訊息錯誤：", e)
-        reply_text = "❌ 圖片分析失敗，請稍後再試一次。"
+        reply_text = "❌ 圖片分析失敗或回應逾時，請稍後再試一次。"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
@@ -162,4 +168,3 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
