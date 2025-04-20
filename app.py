@@ -73,7 +73,6 @@ def handle_postback(event):
 # 處理文字訊息（使用非阻塞 thread）
 def process_text_gemini(uid, user_message, history, prompt):
     try:
-        # 醫療相關關鍵字強化判斷
         medical_keywords = [
             "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
             "手", "手指", "手掌", "手臂", "指甲",
@@ -114,7 +113,6 @@ def handle_text(event):
         print("預先提示錯誤：", e)
     threading.Thread(target=process_text_gemini, args=(uid, user_message, history, prompt)).start()
 
-# 圖片醫療預覽關鍵字判斷
 body_parts = [
     "頭", "頭部", "頭髮", "眼睛", "耳朵", "鼻子", "嘴巴", "牙齒", "脖子", "肩膀",
     "手", "手指", "手掌", "手臂", "指甲",
@@ -182,7 +180,6 @@ def handle_image(event):
     except Exception as e:
         print("圖片最終推送失敗：", e)
 
-# Gemini 狀態測試路由
 @app.route("/test-gemini")
 def test_gemini():
     def run_gemini():
@@ -235,4 +232,5 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
 
